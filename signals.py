@@ -1,74 +1,61 @@
-import yfinance as yf
+import requests
 
+COIN_IDS = {
+    "BTC": "bitcoin",
+    "ETH": "ethereum",
+    "SOL": "solana",
+    "BNB": "binancecoin",
+    "XRP": "ripple",
+    "ADA": "cardano",
+    "DOGE": "dogecoin",
+    "AVAX": "avalanche-2",
+    "LINK": "chainlink",
+    "MATIC": "matic-network",
+}
 
-def get_price(ticker: str) -> float | None:
+def get_price(ticker):
     try:
-        t = yf.Ticker(ticker)
-        price = t.fast_info.last_price
-        if price:
-            return float(price)
-        hist = t.history(period="1d")
-        if not hist.empty:
-            return float(hist["Close"].iloc[-1])
+        coin_id = COIN_IDS.get(ticker.upper(), ticker.lower())
+        url = f"https://api.coingecko.com/api/v3/simple/price?ids={coin_id}&vs_currencies=usd"
+        r = requests.get(url, timeout=10)
+        data = r.json()
+        if coin_id in data:
+            return data[coin_id]["usd"]
         return None
-    except Exception:
+    except:
         return None
 
-
-def get_signal(ticker: str) -> dict | None:
+def get_signal(ticker):
     try:
-        df = yf.download(ticker, period="3mo", interval="1d", progress=False, auto_adjust=True)
-        if df is None or df.empty or len(df) < 50:
+        coin_id = COIN_IDS.get(ticker.upper(), ticker.lower())
+        url = f"https://api.coingecko.com/api/v3/coins/{coin_id}/market_chart?vs_currency=usd&days=3&interval=hourly"
+        r = requests.get(url, timeout=10)
+        data = r.json()
+        if "prices" not in data:
             return None
-
-        close = df["Close"].squeeze()
-
-        delta = close.diff()
-        gain  = delta.clip(lower=0).rolling(14).mean()
-        loss  = (-delta.clip(upper=0)).rolling(14).mean()
-        rsi   = 100 - (100 / (1 + gain / loss))
-        current_rsi = float(rsi.iloc[-1])
-
-        ema12        = close.ewm(span=12, adjust=False).mean()
-        ema26        = close.ewm(span=26, adjust=False).mean()
-        macd_line    = ema12 - ema26
-        signal_line  = macd_line.ewm(span=9, adjust=False).mean()
-        macd_bullish    = float(macd_line.iloc[-1]) > float(signal_line.iloc[-1])
-        macd_crossover  = float(macd_line.iloc[-2]) <= float(signal_line.iloc[-2]) and float(macd_line.iloc[-1]) > float(signal_line.iloc[-1])
-        macd_crossunder = float(macd_line.iloc[-2]) >= float(signal_line.iloc[-2]) and float(macd_line.iloc[-1]) < float(signal_line.iloc[-1])
-
-        ema20       = close.ewm(span=20, adjust=False).mean()
-        ema50       = close.ewm(span=50, adjust=False).mean()
-        ema_uptrend = float(ema20.iloc[-1]) > float(ema50.iloc[-1])
-
-        price   = float(close.iloc[-1])
-        bullish = sum([current_rsi < 40, macd_bullish, ema_uptrend])
-        bearish = sum([current_rsi > 60, not macd_bullish, not ema_uptrend])
-
-        if current_rsi < 30:
-            signal, reason = "BUY",     f"RSI oversold ({current_rsi:.1f})"
-        elif current_rsi > 70:
-            signal, reason = "SELL",    f"RSI overbought ({current_rsi:.1f})"
-        elif macd_crossover and ema_uptrend:
-            signal, reason = "BUY",     "MACD bullish crossover + uptrend"
-        elif macd_crossunder and not ema_uptrend:
-            signal, reason = "SELL",    "MACD bearish crossunder + downtrend"
-        elif bullish >= 2:
-            signal, reason = "BUY",     f"Bullish momentum ({bullish}/3 indicators)"
-        elif bearish >= 2:
-            signal, reason = "SELL",    f"Bearish momentum ({bearish}/3 indicators)"
+        prices = [p[1] for p in data["prices"]]
+        current = prices[-1]
+        delta = [prices[i] - prices[i-1] for i in range(1, len(prices))]
+        gains = [d if d > 0 else 0 for d in delta]
+        losses = [-d if d < 0 else 0 for d in delta]
+        avg_gain = sum(gains[-14:]) / 14
+        avg_loss = sum(losses[-14:]) / 14
+        rsi = 100 if avg_loss == 0 else 100 - (100 / (1 + avg_gain / avg_loss))
+        if rsi < 40:
+            signal = "BUY"
+        elif rsi > 60:
+            signal = "SELL"
         else:
-            signal, reason = "NEUTRAL", "Mixed signals"
-
-        target    = round(price * 1.08, 4) if signal == "BUY"  else round(price * 0.92, 4) if signal == "SELL" else None
-        stop_loss = round(price * 0.96, 4) if signal == "BUY"  else round(price * 1.04, 4) if signal == "SELL" else None
-
+            signal = "NEUTRAL"
+        target = round(current * 1.08, 4) if signal == "BUY" else round(current * 0.92, 4) if signal == "SELL" else None
+        stop_loss = round(current * 0.96, 4) if signal == "BUY" else round(current * 1.04, 4) if signal == "SELL" else None
         return {
-            "signal": signal, "price": price, "target": target, "stop_loss": stop_loss,
-            "rsi": current_rsi, "macd_bullish": macd_bullish,
-            "macd_crossover": macd_crossover, "macd_crossunder": macd_crossunder,
-            "ema_uptrend": ema_uptrend, "reason": reason,
+            "signal": signal,
+            "price": round(current, 4),
+            "target": target,
+            "stop_loss": stop_loss,
+            "rsi": round(rsi, 1),
         }
     except Exception as e:
-        print(f"Signal error for {ticker}: {e}")
+        print(f"Signal error: {e}")
         return None
