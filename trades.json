@@ -1,0 +1,15 @@
+[
+  {
+    "id": 1,
+    "ticker": "XRP",
+    "action": "BUY",
+    "entry": 16.06999969482422,
+    "target": 17.3556,
+    "stop_loss": 15.4272,
+    "timestamp": "2026-05-16T04:02:59.346444",
+    "status": "CLOSED",
+    "close_price": 1.43,
+    "result": "LOSS",
+    "pnl_pct": -91.1
+  }
+]
