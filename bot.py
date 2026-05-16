@@ -1,5 +1,6 @@
 import os
 import logging
+import yfinance as yf
 from dotenv import load_dotenv
 from telegram import Update
 from telegram.ext import Application, CommandHandler, ContextTypes
@@ -12,51 +13,29 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+def get_signal(ticker: str):
+    try:
+        data = yf.download(ticker, period="5d", interval="1h", progress=False)
+        if data.empty:
+            return None
+        close = data["Close"].dropna()
+        current_price = float(close.iloc[-1])
+        delta = close.diff()
+        gain = delta.clip(lower=0).rolling(14).mean()
+        loss = (-delta.clip(upper=0)).rolling(14).mean()
+        rs = gain / loss
+        rsi = float((100 - (100 / (1 + rs))).iloc[-1])
+        ema12 = close.ewm(span=12).mean()
+        ema26 = close.ewm(span=26).mean()
+        macd = float((ema12 - ema26).iloc[-1])
+        action = "BUY" if rsi < 45 and macd > 0 else "SELL" if rsi > 55 and macd < 0 else "HOLD"
+        entry = round(current_price, 2)
+        target = round(current_price * 1.05, 2) if action == "BUY" else round(current_price * 0.95, 2)
+        stop_loss = round(current_price * 0.97, 2) if action == "BUY" else round(current_price * 1.03, 2)
+        return {"ticker": ticker.upper(), "action": action, "entry": entry, "target": target, "stop_loss": stop_loss, "rsi": round(rsi, 1)}
+    except Exception as e:
+        logger.error(f"Error fetching signal: {e}")
+        return None
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await update.message.reply_text(
-        "Welcome to the Trading Signals Bot!\n\n"
-        "Available commands:\n"
-        "/start - Show this message\n"
-        "/signal - Get the latest trading signal\n"
-        "/help - Show help"
-    )
-
-
-async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    await update.message.reply_text(
-        "Trading Signals Bot Help\n\n"
-        "/signal - Fetch the latest trading signal\n"
-        "/start - Restart the bot"
-    )
-
-
-async def signal(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    # Placeholder — replace with real signal logic
-    await update.message.reply_text(
-        "📊 Latest Signal\n\n"
-        "Symbol: BTC/USDT\n"
-        "Action: BUY\n"
-        "Entry: $65,000\n"
-        "Target: $70,000\n"
-        "Stop Loss: $62,000\n\n"
-        "(Demo signal — integrate your data source to get real signals)"
-    )
-
-
-def main() -> None:
-    token = os.getenv("TELEGRAM_BOT_TOKEN")
-    if not token:
-        raise ValueError("TELEGRAM_BOT_TOKEN is not set in environment")
-
-    app = Application.builder().token(token).build()
-    app.add_handler(CommandHandler("start", start))
-    app.add_handler(CommandHandler("help", help_command))
-    app.add_handler(CommandHandler("signal", signal))
-
-    logger.info("Bot started — polling for updates")
-    app.run_polling(allowed_updates=Update.ALL_TYPES)
-
-
-if __name__ == "__main__":
-    main()
